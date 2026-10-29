@@ -17,7 +17,7 @@ from sklearn.exceptions import ConvergenceWarning
 # Local application/library specific imports
 from src.feature_engineering import rank_features, run_tests as run_feature_tests
 from src.preprocessing import DataPreparation, run_tests
-from src.models import ModelTraining
+from src.model_optimization import ModelTraining
 
 REQUIRED_CONFIG_KEYS = [
     "file_path", "target_column", "val_test_size", "val_size",
