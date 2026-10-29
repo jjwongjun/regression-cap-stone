@@ -15,6 +15,7 @@ import yaml
 from sklearn.exceptions import ConvergenceWarning
 
 # Local application/library specific imports
+from src.feature_engineering import rank_features, run_tests as run_feature_tests
 from src.preprocessing import DataPreparation, run_tests
 from src.model_training import ModelTraining
 
@@ -156,6 +157,7 @@ def main():
 
     if args.test:
         run_tests()
+        run_feature_tests()
         return
 
     # Hide only sklearn convergence warnings (not every warning)
@@ -189,6 +191,13 @@ def main():
         X_train, X_val, X_test, y_train, y_val, y_test = model_training.split_data(
             cleaned_df
         )
+
+        # Rank the features on the training split only (which ones carry the signal?)
+        ranking = rank_features(data_prep.column_transformer, X_train, y_train, config.get("random_seed", 42))
+        logging.info(f"Feature ranking (1 = most relevant):\n{ranking.round(3).to_string()}")
+        if model_training.run_dir:
+            os.makedirs(model_training.run_dir, exist_ok=True)
+            ranking.to_csv(os.path.join(model_training.run_dir, "feature_ranking.csv"))
 
         # Train and evaluate baseline models with default hyperparameters
         baseline_models, baseline_metrics = (

@@ -10,6 +10,11 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, RobustScaler, OrdinalEncoder
 
+try:
+    from src.feature_engineering import NEW_FEATURES, create_features, make_selector
+except ImportError:  # when this file is run directly (python src/preprocessing.py)
+    from feature_engineering import NEW_FEATURES, create_features, make_selector
+
 
 class DataPreparation:
     """
@@ -19,8 +24,11 @@ class DataPreparation:
     -----------
     config : Dict[str, Any]
         Configuration dictionary containing parameters for data cleaning and preprocessing.
-    preprocessor : sklearn.compose.ColumnTransformer
-        A preprocessor pipeline for transforming numerical, nominal and ordinal features.
+    preprocessor : sklearn.compose.ColumnTransformer or sklearn.pipeline.Pipeline
+        A preprocessor for transforming numerical (including engineered), nominal and ordinal
+        features. It is a Pipeline with a feature selection step when n_selected_features is set.
+    column_transformer : sklearn.compose.ColumnTransformer
+        The preprocessor without the optional selection step (used to rank all features).
     """
 
     # Raw columns the cleaning and feature engineering rely on (needed for training and for prediction)
@@ -38,13 +46,22 @@ class DataPreparation:
         config (Dict[str, Any]): Configuration dictionary containing parameters for data cleaning and preprocessing.
         """
         self.config = config
-        self.preprocessor = self._create_preprocessor()
+        # Optional settings (config.yaml): engineered features on/off, and keep only the k best features
+        self.use_feature_engineering = config.get("use_feature_engineering", True)
+        k = config.get("n_selected_features")
+        self.column_transformer = self._create_preprocessor()
+        self.preprocessor = (
+            Pipeline(steps=[("columns", self.column_transformer), ("select", make_selector(k))])
+            if k else self.column_transformer
+        )
 
     def clean_data(self, df: pd.DataFrame, training: bool = True) -> pd.DataFrame:
         """
         Cleans the input DataFrame by performing several preprocessing steps.
 
-        Negative values of number_of_amenities (impossible counts) are set to 0. No rows are removed,
+        Negative values of number_of_amenities (impossible counts) are set to 0, then the engineered
+        features from feature_engineering.py are added (unless use_feature_engineering is false in
+        the config). No rows are removed,
         so every input row is kept. With training=True (the default) the target column must also be
         present and free of missing values; with training=False (used when predicting for new hotel
         rooms) the target is not needed.
@@ -64,23 +81,25 @@ class DataPreparation:
         self._validate_schema(df, required)
         logging.info(f"Raw data has {df.shape[0]} rows and {df.shape[1]} columns.")
         df = df.copy()
-        df['number_of_amenities'] = df['number_of_amenities'].clip(lower=0)  
+        df['number_of_amenities'] = df['number_of_amenities'].clip(lower=0)
+        if self.use_feature_engineering:
+            df = create_features(df)  # row-wise products, so nothing is learned from the data
         self._check_cleaned_data(df, training)
         logging.info(f"Data cleaning completed. Cleaned data has {df.shape[0]} rows and {df.shape[1]} columns.")
         return df
 
-    def fit(self, df: pd.DataFrame) -> "DataPreparation":
-        """Fit the preprocessor on (cleaned) training data and return self."""
-        self.preprocessor.fit(df)
+    def fit(self, df: pd.DataFrame, y=None) -> "DataPreparation":
+        """Fit the preprocessor on (cleaned) training data and return self. y is only needed for feature selection."""
+        self.preprocessor.fit(df, y)
         return self
 
     def transform(self, df: pd.DataFrame):
         """Transform (cleaned) data with the fitted preprocessor into a model-ready array."""
         return self.preprocessor.transform(df)
 
-    def fit_transform(self, df: pd.DataFrame):
-        """Fit the preprocessor on (cleaned) training data and return the transformed array."""
-        return self.preprocessor.fit_transform(df)
+    def fit_transform(self, df: pd.DataFrame, y=None):
+        """Fit the preprocessor on (cleaned) training data and return the transformed array. y is only needed for feature selection."""
+        return self.preprocessor.fit_transform(df, y)
 
     @staticmethod
     def _validate_schema(df: pd.DataFrame, required_columns: List[str]) -> None:
@@ -180,9 +199,12 @@ class DataPreparation:
                 )
             ]
         )
+        numerical_features = self.config["numerical_features"] + (
+            NEW_FEATURES if self.use_feature_engineering else []
+        )
         preprocessor = ColumnTransformer(
             transformers=[
-                ("num", numerical_transformer, self.config["numerical_features"]),
+                ("num", numerical_transformer, numerical_features),
                 ("nom", nominal_transformer, self.config["nominal_features"]),
                 ("ord", ordinal_transformer, self.config["ordinal_features"]),
             ],
@@ -227,10 +249,10 @@ def _make_test_df() -> pd.DataFrame:
 
 
 def test_output_shape():
-    # 4 numeric + 3 one-hot (room_type) + 2 ordinal = 9 columns, one row per input row
+    # 4 numeric + 3 engineered + 3 one-hot (room_type) + 2 ordinal = 12 columns, one row per input row
     prep = DataPreparation(TEST_CONFIG)
     X = prep.fit_transform(prep.clean_data(_make_test_df()))
-    assert X.shape == (6, 9)
+    assert X.shape == (6, 12)
 
 
 def test_ordinal_mapping():
@@ -248,7 +270,7 @@ def test_unseen_categories_do_not_crash():
     new["room_type"] = "Penthouse"
     new["season"] = "Winter"
     X = prep.transform(prep.clean_data(new, training=False))
-    assert X.shape == (2, 9) and np.isfinite(X).all()
+    assert X.shape == (2, 12) and np.isfinite(X).all()
     assert (X[:, -2] == -1).all()   # an unseen season is encoded as -1
 
 
@@ -287,11 +309,31 @@ def test_end_to_end_raw_rows_to_model_ready_matrix():
     prep = DataPreparation(TEST_CONFIG)
     # Training mode: raw rows (with target) -> clean -> fit_transform
     X_train = prep.fit_transform(prep.clean_data(_make_test_df()))
-    assert X_train.shape == (6, 9) and np.isfinite(X_train).all()
+    assert X_train.shape == (6, 12) and np.isfinite(X_train).all()
     # Prediction mode: new raw rows (no target) -> clean -> transform with the fitted preprocessor
     new = _make_test_df().drop(columns="room_price_per_night").head(2)
     X_new = prep.transform(prep.clean_data(new, training=False))
-    assert X_new.shape == (2, 9) and np.isfinite(X_new).all()
+    assert X_new.shape == (2, 12) and np.isfinite(X_new).all()
+
+
+def test_feature_engineering_can_be_switched_off():
+    prep = DataPreparation({**TEST_CONFIG, "use_feature_engineering": False})
+    cleaned = prep.clean_data(_make_test_df())
+    assert not set(NEW_FEATURES) & set(cleaned.columns)
+    assert prep.fit_transform(cleaned).shape == (6, 9)   # no engineered columns
+
+
+def test_engineered_features_are_created_by_clean_data():
+    cleaned = DataPreparation(TEST_CONFIG).clean_data(_make_test_df())
+    assert set(NEW_FEATURES) <= set(cleaned.columns)
+    # Built from the clipped amenities: row 1 has amenities -1.2 -> 0, so the product is 0
+    assert cleaned.loc[1, "star_x_amenities"] == 0
+
+
+def test_feature_selection_keeps_k_columns():
+    prep = DataPreparation({**TEST_CONFIG, "n_selected_features": 5})
+    X = prep.fit_transform(prep.clean_data(_make_test_df()), _make_test_df()["room_price_per_night"])
+    assert X.shape == (6, 5)
 
 
 def run_tests() -> None:
