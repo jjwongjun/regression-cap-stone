@@ -15,7 +15,7 @@ import yaml
 from sklearn.exceptions import ConvergenceWarning
 
 # Local application/library specific imports
-from src.data_preparation import DataPreparation
+from src.preprocessing import DataPreparation, run_tests
 from src.model_training import ModelTraining
 
 REQUIRED_CONFIG_KEYS = [
@@ -107,7 +107,7 @@ def load_data(file_path: str) -> pd.DataFrame:
 
 def predict(config: dict, input_path: str, model_path: str, output_path: str) -> None:
     """
-    Score new students with a saved model, without retraining.
+    Score new hotel rooms with a saved model, without retraining.
 
     The new data is cleaned in prediction mode (no rows are removed), so the output has exactly
     one prediction per input row.
@@ -123,13 +123,13 @@ def predict(config: dict, input_path: str, model_path: str, output_path: str) ->
     except FileNotFoundError:
         raise FileNotFoundError(f"Saved model not found: {model_path}")
     df = load_data(input_path)
-    student_ids = df["student_id"] if "student_id" in df.columns else pd.Series(df.index, name="row")
+    row_ids = pd.Series(df.index, name="row")
     cleaned = DataPreparation(config).clean_data(df, training=False)
     cleaned = cleaned.drop(columns=config["target_column"], errors="ignore")
-    if len(cleaned) != len(student_ids):
+    if len(cleaned) != len(row_ids):
         raise ValueError("Prediction mode must not remove rows.")
     predictions = pd.DataFrame(
-        {student_ids.name or "row": student_ids.values, f"predicted_{config['target_column']}": model.predict(cleaned)}
+        {row_ids.name: row_ids.values, f"predicted_{config['target_column']}": model.predict(cleaned)}
     )
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     predictions.to_csv(output_path, index=False)
@@ -148,10 +148,15 @@ def main():
     parser.add_argument(
         "--config", default="./src/config.yaml", help="Path to the YAML configuration file"
     )
-    parser.add_argument("--predict", metavar="INPUT_CSV", help="Score new students from this CSV instead of training")
+    parser.add_argument("--predict", metavar="INPUT_CSV", help="Score new hotel rooms from this CSV instead of training")
     parser.add_argument("--model", help="Saved model (best_model.joblib) to use with --predict")
     parser.add_argument("--output", default="./predictions.csv", help="Where --predict writes its predictions")
+    parser.add_argument("--test", action="store_true", help="Run the preprocessing tests and exit")
     args = parser.parse_args()
+
+    if args.test:
+        run_tests()
+        return
 
     # Hide only sklearn convergence warnings (not every warning)
     warnings.filterwarnings("ignore", category=ConvergenceWarning)
