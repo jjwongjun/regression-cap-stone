@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Union
 
 # Related third-party imports
 import joblib
@@ -14,7 +14,6 @@ import yaml
 from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyRegressor
-from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Lasso, LinearRegression, Ridge
 from sklearn.metrics import (
     mean_absolute_error,
@@ -34,21 +33,22 @@ class ModelTraining:
     -----------
     config : Dict[str, Any]
         Configuration dictionary containing parameters for model training and evaluation.
-    preprocessor : sklearn.compose.ColumnTransformer
-        A preprocessor pipeline for transforming numerical, nominal, and ordinal features.
+    preprocessor : sklearn.compose.ColumnTransformer or sklearn.pipeline.Pipeline
+        A preprocessor for transforming numerical, nominal, and ordinal features. It is a Pipeline
+        (ColumnTransformer + feature selection) when n_selected_features is set in the config.
     """
 
     # Metrics every evaluation must report (checked in _compute_metrics_and_plots)
     REQUIRED_METRICS = ["MAE", "MSE", "RMSE", "R²"]
 
-    def __init__(self, config: Dict[str, Any], preprocessor: ColumnTransformer):
+    def __init__(self, config: Dict[str, Any], preprocessor: Union[ColumnTransformer, Pipeline]):
         """
         Initialize the ModelTraining class with configuration and preprocessor.
 
         Args:
         -----
         config (Dict[str, Any]): Configuration dictionary containing parameters for model training and evaluation.
-        preprocessor (sklearn.compose.ColumnTransformer): A preprocessor pipeline for transforming numerical, nominal, and ordinal features.
+        preprocessor (ColumnTransformer or Pipeline): A preprocessor for transforming numerical, nominal, and ordinal features.
         """
         self.config = config
         self.preprocessor = preprocessor
@@ -143,14 +143,12 @@ class ModelTraining:
         Tuple[Dict[str, Pipeline], Dict[str, Dict[str, float]]]: A tuple containing the trained pipelines and their evaluation metrics.
         """
         logging.info("Training and evaluating baseline models.")
-        self._check_preprocessing(X_train)
+        self._check_preprocessing(X_train, y_train)
         models = {
             "dummy_mean": DummyRegressor(strategy="mean"),  # trivial benchmark every real model must beat
             "linear_regression": LinearRegression(),
             "ridge": Ridge(),
             "lasso": Lasso(),
-            "random_forest": RandomForestRegressor(n_estimators=200, min_samples_leaf=5, n_jobs=-1, random_state=self.seed),
-            "hist_gradient_boosting": HistGradientBoostingRegressor(random_state=self.seed),
         }
         pipelines = {}
         metrics = {}
@@ -173,7 +171,8 @@ class ModelTraining:
         y_val: pd.Series,
     ) -> Tuple[Dict[str, Pipeline], Dict[str, Dict[str, float]]]:
         """
-        Perform hyperparameter tuning (grid search with cross-validation) for Ridge, Lasso, Random Forest, HistGradientBoosting models and evaluate them.
+        Perform hyperparameter tuning (grid search with cross-validation) for the Ridge and Lasso baselines and evaluate them.
+        The advanced models (random forest, gradient boosting) are tuned in train_and_evaluate_advanced_models.
 
         Args:
         -----
@@ -193,10 +192,8 @@ class ModelTraining:
         scoring = self.config["scoring"]
 
         models = {
-       "ridge_tuned": (Ridge(), self.config["ridge_param_grid"]),
-       "lasso_tuned": (Lasso(), self.config["lasso_param_grid"]),
-       "rf_tuned": (RandomForestRegressor(n_estimators=200, random_state=self.seed), self.config["rf_param_grid"]),
-       "hgb_tuned": (HistGradientBoostingRegressor(random_state=self.seed), self.config["hgb_param_grid"]),
+            "ridge_tuned": (Ridge(), self.config["ridge_param_grid"]),
+            "lasso_tuned": (Lasso(), self.config["lasso_param_grid"]),
         }
         for model_name, (model, param_grid) in models.items():
             pipeline = self._new_pipeline(model)
@@ -221,6 +218,78 @@ class ModelTraining:
 
         logging.info("Hyperparameter tuning completed.")
         return tuned_models, tuned_metrics
+
+    def train_and_evaluate_advanced_models(
+        self,
+        advanced_models: list,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_val: pd.DataFrame,
+        y_val: pd.Series,
+    ) -> Tuple[Dict[str, Pipeline], Dict[str, Dict[str, float]]]:
+        """
+        Train (with grid search) and evaluate the advanced models from advanced_models.py.
+
+        Each model only needs `name`, `fit(X, y)` and `predict(X)`, and after fit the attributes
+        `pipeline_`, `best_params_`, `best_cv_score_` and `search_`.
+
+        Args:
+        -----
+        advanced_models (list): Unfitted advanced model objects (for example RandomForestModel).
+        X_train (pd.DataFrame): The training features.
+        y_train (pd.Series): The training target variable.
+        X_val (pd.DataFrame): The validation features.
+        y_val (pd.Series): The validation target variable.
+
+        Returns:
+        --------
+        Tuple[Dict[str, Pipeline], Dict[str, Dict[str, float]]]: The best fitted pipelines and their validation metrics.
+        """
+        logging.info("Training and evaluating advanced models.")
+        scoring = self.config["scoring"]
+        pipelines = {}
+        metrics = {}
+        for model in advanced_models:
+            model.fit(X_train, y_train)
+            pipelines[model.name] = model.pipeline_
+            self.tuning_results[model.name] = {
+                "best_params": model.best_params_,
+                f"best_cv_{scoring}": model.best_cv_score_,
+            }
+            logging.info(
+                f"{model.name}: best params {model.best_params_}, "
+                f"best CV {scoring} = {model.best_cv_score_:.4f}"
+            )
+            self._save_cv_results(model.search_, model.name)
+            metrics[model.name] = self._evaluate_model(model, X_val, y_val, model.name)
+        return pipelines, metrics
+
+    def save_comparison(self, all_metrics: Dict[str, Dict[str, float]], advanced_names: list) -> pd.DataFrame:
+        """
+        Build a side-by-side comparison of all models, log it and save it as model_comparison.csv.
+
+        Args:
+        -----
+        all_metrics (Dict[str, Dict[str, float]]): Validation metrics of every model.
+        advanced_names (list): Names of the advanced models (the rest are labelled baseline).
+
+        Returns:
+        --------
+        pd.DataFrame: One row per model, sorted by R² (best first). The cross-validation column is
+        only filled for the tuned models.
+        """
+        scoring = self.config["scoring"]
+        table = pd.DataFrame(all_metrics).T[self.REQUIRED_METRICS]
+        table.insert(0, "group", ["advanced" if name in advanced_names else "baseline" for name in table.index])
+        table[f"cv_{scoring}"] = [
+            self.tuning_results.get(name, {}).get(f"best_cv_{scoring}") for name in table.index
+        ]
+        table = table.sort_values("R²", ascending=False)
+        logging.info(f"Model comparison on the validation set (best R² first):\n{table.round(3).to_string()}")
+        if self.run_dir:
+            os.makedirs(self.run_dir, exist_ok=True)
+            table.to_csv(os.path.join(self.run_dir, "model_comparison.csv"), index_label="model")
+        return table
 
     def refit_on_train_and_validation(
         self,
@@ -349,7 +418,7 @@ class ModelTraining:
         ax_fit.legend()
         ax_res.scatter(y_pred, residuals, alpha=0.3)
         ax_res.axhline(0, color='red', linestyle='--')
-        ax_res.set_xlabel('Predicted score')
+        ax_res.set_xlabel('Predicted room price')
         ax_res.set_ylabel('Residual (actual - predicted)')
         ax_res.set_title(f"{model_name} - Residuals vs Predicted")
         ax_hist.hist(residuals, bins=40)
@@ -466,7 +535,7 @@ class ModelTraining:
         if not len(X_train) > max(len(X_val), len(X_test)):
             raise ValueError("Training set must be larger than the validation and test sets.")
 
-    def _check_preprocessing(self, X_train: pd.DataFrame) -> None:
+    def _check_preprocessing(self, X_train: pd.DataFrame, y_train: pd.Series) -> None:
         """
         Sanity check that the preprocessor produces only finite numbers (no NaN left after imputation).
 
@@ -475,12 +544,13 @@ class ModelTraining:
         Args:
         -----
         X_train (pd.DataFrame): The training features.
+        y_train (pd.Series): The training target (needed when feature selection is on).
 
         Raises:
         -------
         ValueError: If the preprocessed training data contains NaN or infinite values.
         """
-        transformed = clone(self.preprocessor).fit_transform(X_train)
+        transformed = clone(self.preprocessor).fit_transform(X_train, y_train)
         if not np.isfinite(np.asarray(transformed, dtype=float)).all():
             raise ValueError("Preprocessed training data still contains NaN or infinite values.")
         logging.info(f"Preprocessing check passed: {transformed.shape[1]} features after encoding.")

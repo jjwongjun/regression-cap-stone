@@ -1,0 +1,45 @@
+file_path: './data/synthetic_data_169.csv'
+target_column: room_price_per_night
+random_seed: 42           # single seed used for splits and models
+val_test_size: 0.2        # fraction of data held out for validation + test
+val_size: 0.5             # fraction of the held-out data that becomes the TEST set (0.5 -> 80/10/10 split)
+artifacts_dir: './artifacts'      # each run saves its model, metrics, predictions, tuning results, config snapshot and plots to a timestamped folder here (remove to disable)
+log_file: './logs/pipeline.log'   # log file written alongside console logging (remove to disable)
+# NOTE: in YAML write a missing value as null (not None). A bare None is read as the text 'None'.
+ridge_param_grid:
+  regressor__alpha: [0.01, 0.1, 1, 10, 100, 1000]
+  regressor__fit_intercept: [True, False]
+lasso_param_grid:
+  regressor__alpha: [0.01, 0.1, 1, 10, 100, 1000]
+  regressor__fit_intercept: [True, False]
+rf_param_grid:
+  regressor__max_depth: [5, 10, null]
+  regressor__min_samples_leaf: [1, 3, 5, 10, 20]
+  regressor__max_features: [0.33, 0.5, 0.75, 1.0]
+hgb_param_grid:
+  regressor__learning_rate: [0.02, 0.05, 0.1]
+  regressor__max_depth: [1, 2, 3]
+  regressor__max_iter: [200, 400, 600]
+  regressor__min_samples_leaf: [20, 40, 80] 
+cv: 5
+scoring: r2
+numerical_features:
+  - hotel_star_rating
+  - distance_from_airport
+  - number_of_amenities
+  - online_rating_score
+nominal_features:
+  - room_type
+ordinal_features:
+  - season
+  - location_city_tier
+season_categories:
+  - Low
+  - Shoulder
+  - High
+location_city_tier_categories:
+  - Tier 3
+  - Tier 2
+  - Tier 1
+use_feature_engineering: True
+n_selected_features: null

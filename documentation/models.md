@@ -103,44 +103,46 @@ understand the data, not to prune it.
 
 ## Models
 
-Ten models are compared. Six are baselines with default settings; four are tuned.
+Eight models are compared: four simple baselines (two of them also tuned) and two advanced models.
+The baselines are in `model_optimization.py`, the advanced models in `advanced_models.py`.
 
-| Model | Type | Why it is included |
-|---|---|---|
-| `dummy_mean` | Predicts the mean price | The benchmark every real model must beat |
-| `linear_regression` | Linear | Simple, interpretable reference |
-| `ridge`, `ridge_tuned` | Linear with L2 penalty | Stabilises coefficients when features are correlated, as here |
-| `lasso`, `lasso_tuned` | Linear with L1 penalty | Can set weak features to exactly zero |
-| `random_forest`, `rf_tuned` | Many decision trees averaged | Captures non-linear effects and interactions; robust to outliers |
-| `hist_gradient_boosting`, `hgb_tuned` | Trees built one after another, each fixing the previous errors | Usually the strongest on tabular data |
+| Model | Group | Type | Why it is included |
+|---|---|---|---|
+| `dummy_mean` | baseline | Predicts the mean price | The benchmark every real model must beat |
+| `linear_regression` | baseline | Linear | Simple, interpretable reference |
+| `ridge`, `ridge_tuned` | baseline | Linear with L2 penalty | Stabilises coefficients when features are correlated, as here |
+| `lasso`, `lasso_tuned` | baseline | Linear with L1 penalty | Can set weak features to exactly zero |
+| `random_forest` | **advanced** | Many decision trees built independently and averaged (bagging) | Captures non-linear effects and interactions; robust to outliers |
+| `hist_gradient_boosting` | **advanced** | Trees built one after another, each fixing the previous errors (boosting) | Usually the strongest on tabular data |
 
-Tuned models use a grid search with 5-fold cross-validation on the training set (grids in
-[configuration.md](configuration.md)).
+The two advanced models have different architectures from the linear baselines and from each
+other: linear models assume a straight-line relationship, a forest averages many independent deep
+trees, and boosting adds many shallow trees in sequence. Both advanced models are tuned with grid
+search and 5-fold cross-validation on the training set (grids in
+[configuration.md](configuration.md)), and both use the same `fit` / `predict` interface.
 
 ## How the final model is chosen
 
 1. Split the data 80/10/10 (800 train, 100 validation, 100 test) with a fixed seed.
 2. Train every model on the training set and score it on the validation set.
-3. Pick the model with the highest validation R².
+3. Put all models side by side in one table (`model_comparison.csv`) and pick the model with the highest validation R².
 4. Refit that model on train + validation (900 rows), keeping its parameters.
 5. Evaluate it once on the test set. The test set is never used for any decision.
 
 ## Results
 
-Validation set (100 rows):
+Validation set (100 rows), side by side (also saved as `model_comparison.csv`):
 
-| Model | MAE | RMSE | R² |
-|---|---|---|---|
-| `dummy_mean` | 49.11 | 65.64 | -0.002 |
-| `linear_regression` | 21.71 | 28.13 | 0.816 |
-| `ridge` | 22.23 | 28.81 | 0.807 |
-| `lasso` | 22.47 | 29.55 | 0.797 |
-| `random_forest` | 21.46 | 29.87 | 0.793 |
-| `hist_gradient_boosting` | 22.38 | 30.71 | 0.781 |
-| `ridge_tuned` | 21.87 | 28.29 | 0.814 |
-| `lasso_tuned` | 21.78 | 28.20 | 0.815 |
-| `rf_tuned` | 21.29 | 30.02 | 0.790 |
-| **`hgb_tuned`** | **20.04** | **27.33** | **0.826** |
+| Model | Group | MAE | RMSE | R² |
+|---|---|---|---|---|
+| **`hist_gradient_boosting`** | advanced | **20.04** | **27.33** | **0.826** |
+| `linear_regression` | baseline | 21.71 | 28.13 | 0.816 |
+| `lasso_tuned` | baseline | 21.78 | 28.20 | 0.815 |
+| `ridge_tuned` | baseline | 21.87 | 28.29 | 0.814 |
+| `ridge` | baseline | 22.23 | 28.81 | 0.807 |
+| `lasso` | baseline | 22.47 | 29.55 | 0.797 |
+| `random_forest` | advanced | 21.29 | 30.02 | 0.790 |
+| `dummy_mean` | baseline | 49.11 | 65.64 | -0.002 |
 
 Cross-validated R² on the training set (average over 5 folds) and the parameters chosen:
 
@@ -148,10 +150,10 @@ Cross-validated R² on the training set (average over 5 folds) and the parameter
 |---|---|---|
 | `ridge_tuned` | 0.776 | alpha 0.1 |
 | `lasso_tuned` | 0.776 | alpha 0.01 |
-| `hgb_tuned` | 0.771 | learning rate 0.05, depth 2, 600 iterations, minimum 40 samples per leaf |
-| `rf_tuned` | 0.730 | no depth limit, all features per split, minimum 3 samples per leaf |
+| `hist_gradient_boosting` | 0.771 | learning rate 0.05, depth 2, 600 iterations, minimum 40 samples per leaf |
+| `random_forest` | 0.730 | no depth limit, all features per split, minimum 3 samples per leaf |
 
-Selected model `hgb_tuned`, refitted on train + validation and evaluated on the test set:
+Selected model `hist_gradient_boosting`, refitted on train + validation and evaluated on the test set:
 
 | MAE | RMSE | R² |
 |---|---|---|
@@ -162,6 +164,31 @@ Every real model explains far more than the mean-only baseline.
 
 These results are the same with the pinned library versions in `requirements.txt` and with newer
 ones (scikit-learn 1.8).
+
+## What the comparison means
+
+**Against the mean-only baseline.** Every real model is far better than predicting the average
+price: the typical error falls from about 49 per night (`dummy_mean`) to about 20 to 22.
+
+**Advanced against linear baselines.** The best model overall is the boosting model. It beats the
+best linear baseline (`linear_regression`) by about 1.7 per night in MAE (20.0 against 21.7, which
+is under 1% of the average price of 210) and by 0.01 in R². The random forest is **not** better
+than the linear models on this data (R² 0.790 against 0.816). So the advanced models do not give a
+large improvement here. The likely reason is that most of the signal is close to linear once the
+three engineered interaction features are included (see above), which leaves little for the more
+flexible models to add.
+
+**Trade-offs between models.** The metrics do not always agree. The random forest has a lower MAE
+than linear regression (21.3 against 21.7) but a higher RMSE (30.0 against 28.1), which means it is
+accurate for most rooms but makes some larger mistakes. RMSE punishes large errors more than MAE
+does. The boosting model is first on MAE, RMSE and R² at the same time, which is why it is selected.
+
+**Is the improvement large enough to matter?** For nightly prices, about 2 per night on a 210 room
+is small, and with only 100 validation rows it is within the noise (see below). The cross-validation
+scores point the other way: the two linear models (0.776) are slightly ahead of boosting (0.771).
+The practical conclusion is that boosting and the best linear models perform about equally here.
+Boosting was selected because it had the best validation scores; a linear model would be a simpler
+choice with almost the same accuracy.
 
 ## How far to trust the numbers
 

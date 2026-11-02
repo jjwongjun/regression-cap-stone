@@ -15,6 +15,7 @@ import yaml
 from sklearn.exceptions import ConvergenceWarning
 
 # Local application/library specific imports
+from src.advanced_models import GradientBoostingModel, RandomForestModel, run_tests as run_advanced_tests
 from src.feature_engineering import rank_features, run_tests as run_feature_tests
 from src.preprocessing import DataPreparation, run_tests
 from src.model_optimization import ModelTraining
@@ -158,6 +159,7 @@ def main():
     if args.test:
         run_tests()
         run_feature_tests()
+        run_advanced_tests()
         return
 
     # Hide only sklearn convergence warnings (not every warning)
@@ -211,11 +213,23 @@ def main():
             X_train, y_train, X_val, y_val
         )
 
+        # Train and evaluate the advanced models (random forest and gradient boosting, see advanced_models.py)
+        advanced_models, advanced_metrics = model_training.train_and_evaluate_advanced_models(
+            [
+                RandomForestModel(config, data_prep.preprocessor),
+                GradientBoostingModel(config, data_prep.preprocessor),
+            ],
+            X_train, y_train, X_val, y_val,
+        )
+
         # Combine all models and their metrics into dictionaries
-        all_models = {**baseline_models, **tuned_models}
-        all_metrics = {**baseline_metrics, **tuned_metrics}
+        all_models = {**baseline_models, **tuned_models, **advanced_models}
+        all_metrics = {**baseline_metrics, **tuned_metrics, **advanced_metrics}
         if not all_metrics:
             raise ValueError("No models were trained.")
+
+        # Side-by-side comparison of every model (logged and saved as model_comparison.csv)
+        model_training.save_comparison(all_metrics, advanced_names=list(advanced_metrics))
 
         # Find the best model based on R² score on the validation set
         best_model_name = max(all_metrics, key=lambda k: all_metrics[k]["R²"])

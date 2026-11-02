@@ -5,6 +5,7 @@ helpers; they are listed briefly because other code and the tests rely on them.
 
 Contents: [Command line](#command-line) · [main.py](#mainpy) · [preprocessing.py](#preprocessingpy) ·
 [feature_engineering.py](#feature_engineeringpy) · [model_optimization.py](#model_optimizationpy) ·
+[advanced_models.py](#advanced_modelspy) ·
 [Files written by a run](#files-written-by-a-run) · [Errors and exit codes](#errors-and-exit-codes)
 
 ## Command line
@@ -17,7 +18,7 @@ Run everything from the project root.
 | `python main.py --config PATH` | Use another configuration file (default `./src/config.yaml`). |
 | `python main.py --predict INPUT.csv --model MODEL.joblib` | Score new rooms with a saved model. |
 | `python main.py --predict INPUT.csv --model MODEL.joblib --output OUT.csv` | Same, choosing where the predictions go (default `./predictions.csv`). |
-| `python main.py --test` | Run the preprocessing and feature engineering tests and exit. |
+| `python main.py --test` | Run the preprocessing, feature engineering and advanced model tests and exit. |
 
 `--predict` needs `--model`. `--test` needs no config or data file.
 
@@ -59,10 +60,12 @@ pipeline:
 2. Load the data and clean it (`DataPreparation`).
 3. Split into train, validation and test (`ModelTraining.split_data`).
 4. Rank the features on the training split and save `feature_ranking.csv`.
-5. Train the baseline models, then the tuned models; collect their validation metrics.
-6. Select the model with the highest validation R².
-7. Refit it on train + validation and evaluate it once on the test set.
-8. Save the artifacts.
+5. Train the baseline models, then the tuned Ridge and Lasso, then the two advanced models
+   (random forest and gradient boosting); collect their validation metrics.
+6. Build the side-by-side comparison of all models (logged and saved as `model_comparison.csv`).
+7. Select the model with the highest validation R².
+8. Refit it on train + validation and evaluate it once on the test set.
+9. Save the artifacts.
 
 Any `FileNotFoundError` or `ValueError` is logged as `Pipeline stopped: ...`; any other error is
 logged with its traceback. Both exit with status 1.
@@ -183,16 +186,26 @@ and the training set is the largest. Logs the target's mean, spread and range in
 Raises `ValueError` if the target column is missing.
 
 #### `train_and_evaluate_baseline_models(X_train, y_train, X_val, y_val) -> (models, metrics)`
-First checks that the preprocessor gives only finite numbers. Then trains six models with default
-settings and returns them with their validation metrics (names as keys):
-`dummy_mean`, `linear_regression`, `ridge`, `lasso`, `random_forest` (200 trees, minimum 5 samples
-per leaf), `hist_gradient_boosting`.
+First checks that the preprocessor gives only finite numbers. Then trains four simple models with
+default settings and returns them with their validation metrics (names as keys): `dummy_mean`,
+`linear_regression`, `ridge`, `lasso`.
 
 #### `train_and_evaluate_tuned_models(X_train, y_train, X_val, y_val) -> (models, metrics)`
-Grid search with cross-validation (`cv`, `scoring`) for `ridge_tuned`, `lasso_tuned`, `rf_tuned`
-(200 trees) and `hgb_tuned`, using the grids in the config. A failed fit stops the run instead of
-being scored as missing. Stores the best parameters and score in `tuning_results` and saves the
-full grid-search results.
+Grid search with cross-validation (`cv`, `scoring`) for the two linear baselines, `ridge_tuned` and
+`lasso_tuned`, using the grids in the config. A failed fit stops the run instead of being scored
+as missing. Stores the best parameters and score in `tuning_results` and saves the full
+grid-search results.
+
+#### `train_and_evaluate_advanced_models(advanced_models, X_train, y_train, X_val, y_val) -> (models, metrics)`
+Trains and evaluates the advanced models from [advanced_models.py](#advanced_modelspy). It takes a
+list of unfitted model objects, calls `fit` on each, and records the best parameters, the CV
+score and the full grid-search results the same way as for the tuned baselines. It returns the best
+fitted pipelines and their validation metrics, keyed by each model's `name`.
+
+#### `save_comparison(all_metrics, advanced_names) -> pd.DataFrame`
+Builds one table with a row per model (sorted by R², best first) and the columns `group`
+(`baseline` or `advanced`), `MAE`, `MSE`, `RMSE`, `R²` and the cross-validation score (filled for
+the tuned models only). The table is logged and saved as `model_comparison.csv`.
 
 #### `refit_on_train_and_validation(model, X_train, y_train, X_val, y_val) -> Pipeline`
 Clones the selected model (keeping its parameters) and refits it on train + validation.
@@ -207,10 +220,40 @@ Writes the files listed below. Does nothing if `artifacts_dir` is not set.
 #### Internal helpers
 `_new_pipeline(model)`, `_evaluate_model(...)`, `_compute_metrics_and_plots(...)` (metrics and the
 three diagnostic plots), `_finish_plot(...)`, `_save_cv_results(...)`, `_check_split_sizes(...)`
-(static, has doctests), `_check_preprocessing(X_train)`, `_log_target_distribution(...)` (static).
+(static, has doctests), `_check_preprocessing(X_train, y_train)`, `_log_target_distribution(...)` (static).
 
 The metrics are MAE, MSE, RMSE (all in price units, or squared) and R² (share of price variance
 explained).
+
+## advanced_models.py
+
+The two advanced models, each behind the same `fit` / `predict` interface.
+
+### `class AdvancedModel(config: dict, preprocessor)`
+Base class. It holds the shared behaviour; each model only says which regressor to build and
+which config grid to use.
+
+| Member | Meaning |
+|---|---|
+| `name` | Name used in the results (set by each model). |
+| `grid_key` | Config key holding the model's parameter grid (set by each model). |
+| `fit(X, y)` | Clones the preprocessor, builds `preprocessor + regressor` as a pipeline and tunes it with a grid search (`cv`, `scoring`) on `(X, y)`. Returns `self`. A failed fit stops the run. |
+| `predict(X)` | Predictions from the best pipeline. Raises `ValueError` if `fit` has not been called. |
+| `pipeline_` | The best fitted `Pipeline` (after `fit`). This is what is refitted and saved. |
+| `best_params_`, `best_cv_score_` | The chosen parameters and their cross-validation score. |
+| `search_` | The fitted `GridSearchCV` (full cross-validation results). |
+
+### The two models
+
+| Class | `name` | Config grid | What it is |
+|---|---|---|---|
+| `RandomForestModel` | `random_forest` | `rf_param_grid` | 200 decision trees built independently on random samples and averaged (bagging) |
+| `GradientBoostingModel` | `hist_gradient_boosting` | `hgb_param_grid` | Shallow trees built one after another, each correcting the previous errors (boosting) |
+
+### `run_tests()`
+Runs the four tests at the bottom of the file: both models share the interface, each uses its own
+grid, `predict` before `fit` raises an error, and the original preprocessor stays unfitted. Also
+`python src/advanced_models.py` or `python -m pytest src/advanced_models.py`.
 
 ## Files written by a run
 
@@ -219,10 +262,11 @@ In `artifacts/run_<timestamp>/`:
 | File | Content |
 |---|---|
 | `best_model.joblib` | The selected model as one pipeline: preprocessing plus regressor. Use it with `--predict`. |
+| `model_comparison.csv` | Side-by-side validation results of every model (see `save_comparison`) |
 | `metrics.json` | Selected model's name, seed, test metrics, and each tuned model's best parameters and CV score |
 | `test_predictions.csv` | Actual price, predicted price and residual for each test row |
 | `<model>_test_diagnostics.png` | Predicted vs actual, residuals vs predicted, residual histogram |
-| `cv_results_<model>.csv` | Every grid-search combination with its CV score and rank (four files) |
+| `cv_results_<model>.csv` | Every grid-search combination with its CV score and rank (four files: `ridge_tuned`, `lasso_tuned`, `random_forest`, `hist_gradient_boosting`) |
 | `feature_ranking.csv` | Output of `rank_features` |
 | `config_snapshot.yaml` | The configuration used |
 

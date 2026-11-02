@@ -26,8 +26,8 @@ pip install -r requirements.txt
 python main.py --test
 ```
 
-The last command should print "All 10 preprocessing tests passed" and "All 4 feature engineering
-tests passed". The full pipeline was run with these exact versions (and separately with newer
+The last command should print "All 10 preprocessing tests passed", "All 4 feature engineering tests
+passed" and "All 4 advanced model tests passed". The full pipeline was run with these exact versions (and separately with newer
 ones) and gave the same results.
 
 ## 2. Train a model
@@ -36,7 +36,7 @@ ones) and gave the same results.
 python main.py
 ```
 
-It took about 3 minutes in testing (most of it is the grid searches) and writes
+It took 3 to 4 minutes in testing (most of it is the grid searches) and writes
 a new `artifacts/run_<timestamp>/` folder (files listed in
 [api_reference.md](api_reference.md#files-written-by-a-run)) and appends to `logs/pipeline.log`.
 
@@ -134,7 +134,7 @@ drifting:
 1. Add the new rows to the training CSV (same columns as `data/synthetic_data_169.csv`) or point
    `file_path` at the new file.
 2. Run `python main.py --test`, then `python main.py`.
-3. Compare the new run's `metrics.json` and `cv_results_*.csv` with the current release. With a
+3. Compare the new run's `metrics.json`, `model_comparison.csv` and `cv_results_*.csv` with the current release. With a
    test set of 100 rows, also compare MAE and RMSE and do not rely on small R² differences.
 4. Release the new folder only if it is at least as good.
 
@@ -161,7 +161,7 @@ Once the model is used on real traffic, watch:
 | Reproducibility | Pinned requirements, one seed, saved configuration copy per run |
 | Input checks | Config, data schema and preprocessed data are validated, with clear error messages |
 | Logging and exit codes | Timestamped console and file log; exit status 0 or 1 |
-| Tests | 14 small tests (`python main.py --test`) plus doctests (`python -m doctest -v src/preprocessing.py src/feature_engineering.py src/model_optimization.py`) |
+| Tests | 18 small tests (`python main.py --test`) plus doctests (`python -m doctest -v src/preprocessing.py src/feature_engineering.py src/advanced_models.py src/model_optimization.py`) |
 | Not yet in place | A separate `tests/` folder with pytest tests for `model_optimization.py` and `main.py`; an automatic test run on every change (continuous integration); stored scaling values for `hotel_star_rating`; an id column in the prediction output; prediction intervals |
 
 ## 8. Troubleshooting
@@ -169,6 +169,7 @@ Once the model is used on real traffic, watch:
 | Message or symptom | Cause and fix |
 |---|---|
 | `ModuleNotFoundError: No module named 'src.model_training'` | An old `main.py`. The module is now `src/model_optimization.py`. |
+| `ModuleNotFoundError: No module named 'src.advanced_models'` | `src/advanced_models.py` is missing. `main.py` needs it, together with `src/model_optimization.py`, `src/preprocessing.py`, `src/feature_engineering.py` and `src/config.yaml`. |
 | `Config is missing required keys` | See [configuration.md](configuration.md). |
 | `Data file not found` | Check `file_path` and run from the project root. |
 | `Input data is missing required columns: [...]` | The CSV lacks one of the seven feature columns (plus the target for training). |

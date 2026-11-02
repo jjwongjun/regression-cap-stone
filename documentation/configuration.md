@@ -46,8 +46,8 @@ step that uses it.
 | `scoring` | **required** | Metric the grid searches maximise, as a scikit-learn scorer name (for example `r2`, `neg_mean_absolute_error`). It also names the field in `metrics.json` (`best_cv_r2`). Model selection between models uses validation R² whatever this is set to. |
 | `ridge_param_grid` | **required** | Grid for Ridge. |
 | `lasso_param_grid` | **required** | Grid for Lasso. |
-| `rf_param_grid` | **required** | Grid for RandomForestRegressor (200 trees are fixed in the code). |
-| `hgb_param_grid` | **required** | Grid for HistGradientBoostingRegressor. |
+| `rf_param_grid` | **required** | Grid for the random forest advanced model (200 trees are fixed in `advanced_models.py`). |
+| `hgb_param_grid` | **required** | Grid for the gradient boosting advanced model. |
 
 Grid rules:
 

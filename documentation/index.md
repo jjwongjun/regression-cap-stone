@@ -21,8 +21,8 @@ conda create -n hotelenv python=3.11
 conda activate hotelenv
 pip install -r requirements.txt
 
-python main.py --test                       # run the tests (about 5 seconds)
-python main.py                              # train, compare and save the best model (about 3 minutes)
+python main.py --test                       # run the tests (about 10 seconds)
+python main.py                              # train, compare and save the best model (3 to 4 minutes)
 python main.py --predict new_rooms.csv --model artifacts/run_<timestamp>/best_model.joblib
 ```
 
@@ -40,15 +40,16 @@ config.yaml ──► load_config ──► load_data (CSV)
                          split 80 / 10 / 10
                     train        validation        test
                       │              │               │
-      baseline models (6) + tuned models (4, grid search with 5-fold CV)
+   baseline models: dummy, linear regression, Ridge, Lasso (Ridge and Lasso also tuned)
+   advanced models: random forest, gradient boosting (both tuned, grid search with 5-fold CV)
                       │              │
-                      └─ scored on validation ─► best model by R²
+                      └─ side-by-side comparison on validation ─► best model by R²
                                     │
                     refit best model on train + validation
                                     │
                        one evaluation on the test set
                                     │
-          artifacts/run_<timestamp>/  (model, metrics, plots, ranking, config copy)
+          artifacts/run_<timestamp>/  (model, metrics, comparison table, plots, ranking, config copy)
 ```
 
 ## Project layout
@@ -60,7 +61,8 @@ src/
   config.yaml              all settings (see configuration.md)
   preprocessing.py         DataPreparation: cleaning, imputation, scaling, encoding
   feature_engineering.py   engineered features and feature selection
-  model_optimization.py    ModelTraining: splitting, training, tuning, evaluation, saving
+  advanced_models.py       the advanced models (random forest, gradient boosting) behind one fit / predict interface
+  model_optimization.py    ModelTraining: splitting, baseline models, evaluation, comparison table, saving
 data/
   synthetic_data_169.csv   training data (1,000 rows, 8 columns)
 artifacts/                 created by each run (one timestamped folder per run)
@@ -73,7 +75,7 @@ class was not), so `main.py` imports it as `from src.model_optimization import M
 
 ## Results at a glance
 
-The selected model is a tuned HistGradientBoosting regressor.
+The selected model is the tuned gradient boosting regressor (`hist_gradient_boosting`), one of the two advanced models.
 
 | Split | R² | MAE (price per night) | RMSE |
 |---|---|---|---|
@@ -81,4 +83,4 @@ The selected model is a tuned HistGradientBoosting regressor.
 | Test (100 rows, after refit on train + validation) | 0.661 | 22.5 | 30.7 |
 
 The validation and test sets are small, so these figures are rough. [models.md](models.md)
-explains how far to trust them and why the test R² is lower.
+explains how the models compare, how far to trust these figures and why the test R² is lower.
